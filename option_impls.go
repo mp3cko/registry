@@ -23,7 +23,7 @@ func withRegistryOption(useRegistry *registry) *option {
 }
 
 // WithUniqueType implementation
-func withUniqueTypesOption() *option {
+func withUniqueTypeOption() *option {
 	f := func(r *registry) error {
 		if !r.config.initComplete {
 			r.config.uniqueTypes = true
@@ -175,9 +175,8 @@ func withCloneRegistryOption(src *registry) *option {
 		src.mu.Lock()
 		defer src.mu.Unlock()
 
-		cloneEntries(src, dest)
-
 		dest.config = src.config.clone()
+		cloneEntries(src, dest)
 		dest.config.clonedRegistry = true
 
 		return nil
@@ -191,8 +190,13 @@ func cloneEntries(from, to *registry) {
 		to.store = make(map[reflect.Type]map[string]any, len(from.store))
 	}
 
-	accessibilityOption := valueOrDefault(from.callOptions.accessibility, access.AccessibilityUndefined)
-	namednessOption := valueOrDefault(from.callOptions.namedness, access.NamednessUndefined)
+	opts := valueOrDefault(from.callOptions, new(callOptions))
+
+	accessibilityOption := valueOrDefault(opts.accessibility, access.AccessibilityUndefined)
+	namednessOption := valueOrDefault(opts.namedness, access.NamednessUndefined)
+
+	uniqueType := opts.uniqueType
+	nameFilter := opts.name
 
 	for rt, instances := range from.store {
 		if int(namednessOption)+int(accessibilityOption) > 0 {
@@ -207,11 +211,11 @@ func cloneEntries(from, to *registry) {
 
 		}
 		nInstances := len(instances)
-		if nInstances > 1 && from.callOptions.uniqueType {
+		if nInstances > 1 && uniqueType {
 			continue
 		}
 
-		if from.callOptions.name != "" {
+		if nameFilter != "" {
 			nInstances = 1
 		}
 
@@ -221,8 +225,8 @@ func cloneEntries(from, to *registry) {
 		}
 
 		for name, instance := range instances {
-			if from.callOptions.name != "" {
-				if name == from.callOptions.name {
+			if nameFilter != "" {
+				if name == nameFilter {
 					to.store[rt][name] = instance
 				}
 

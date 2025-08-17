@@ -109,12 +109,12 @@ func Set[T any](val T, opts ...Option) error {
 		r.dropCallOpts()
 		r.mu.Unlock()
 
-		withReg.mu.Lock()
-		defer withReg.mu.Unlock()
-
 		r = withReg
+		r.mu.Lock()
 		r.callOptions = callOpts
 	}
+
+	defer r.mu.Unlock()
 
 	return setType(r, val)
 }
@@ -127,11 +127,12 @@ func Get[T any](opts ...Option) (T, error) {
 	r.mu.Lock()
 
 	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
-		r.mu.Unlock()
+		r.cleanup()
 		return zeroValue[T](), err
 	}
 
 	if r.callOptions.uniqueName {
+		r.cleanup()
 		return zeroValue[T](), fmt.Errorf("Get WithUniqueNames: %w", ErrNotSupported)
 	}
 
@@ -142,12 +143,12 @@ func Get[T any](opts ...Option) (T, error) {
 		r.dropCallOpts()
 		r.mu.Unlock()
 
-		withReg.mu.Lock()
-		defer withReg.mu.Unlock()
-
 		r = withReg
+		r.mu.Lock()
 		r.callOptions = callOpts
 	}
+
+	defer r.cleanup()
 
 	return getType[T](r)
 }
@@ -157,10 +158,12 @@ func GetAll(opts ...Option) (map[reflect.Type]map[string]any, error) {
 	r.mu.Lock()
 
 	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
+		r.cleanup()
 		return nil, err
 	}
 
 	if r.callOptions.uniqueName {
+		r.cleanup()
 		return nil, fmt.Errorf("GetAll WithUniqueName: %w, use WithUniqueType instead", ErrNotSupported)
 	}
 
@@ -171,12 +174,12 @@ func GetAll(opts ...Option) (map[reflect.Type]map[string]any, error) {
 		r.dropCallOpts()
 		r.mu.Unlock()
 
-		withReg.mu.Lock()
-		defer withReg.mu.Unlock()
-
 		r = withReg
+		r.mu.Lock()
 		r.callOptions = callOpts
 	}
+
+	defer r.cleanup()
 
 	return getAll(r), nil
 }
@@ -186,11 +189,12 @@ func Unset[T any](val T, opts ...Option) error {
 	r.mu.Lock()
 
 	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
-		r.mu.Unlock()
+		r.cleanup()
 		return err
 	}
 
 	if r.callOptions.uniqueName {
+		r.cleanup()
 		return fmt.Errorf("Unset WithUniqueName: %w, use WithUniqueType instead", ErrNotSupported)
 	}
 
@@ -198,16 +202,14 @@ func Unset[T any](val T, opts ...Option) error {
 		withReg := r.callOptions.withRegistry
 		callOpts := r.callOptions.withoutRegistry()
 
-		r.dropCallOpts()
-		r.mu.Unlock()
-
-		withReg.mu.Lock()
-		defer withReg.mu.Unlock()
+		r.cleanup()
 
 		r = withReg
+		r.mu.Lock()
 		r.callOptions = callOpts
-
 	}
+
+	defer r.cleanup()
 
 	return unsetType(r, val)
 }
@@ -216,24 +218,30 @@ func Unset[T any](val T, opts ...Option) error {
 
 // setType in registry, caller must handle mutex locking
 func setType[T any](r *registry, val T) error {
-	defer r.dropCallOpts()
+	if r.callOptions == nil {
+		r.ensureCallOpts()
+	}
+	// take snapshots to avoid surprises if callOptions gets dropped later
+	co := r.callOptions
+	cfg := r.config
 
-	typeMustBeUnique := r.config.uniqueTypes || r.callOptions.uniqueType
-	nameMustBeUnique := r.config.uniqueNames || r.callOptions.uniqueName
-	name := valueOrDefault(r.callOptions.name, r.config.defaultName)
+	name := valueOrDefault(co.name, cfg.defaultName)
+
+	typeMustBeUnique := cfg.uniqueTypes || co.uniqueType
+	nameMustBeUnique := cfg.uniqueNames || co.uniqueName
 
 	rt := reflect.TypeFor[T]()
 
-	rtNamedness, rtAccessibility := access.Info(rt)
+	typeNamedness, typeAccessibility := access.Info(zeroValue[T]())
 
-	requiredAccessibility := max(r.config.accessibility, r.callOptions.accessibility)
-	if rtAccessibility < requiredAccessibility {
-		return fmt.Errorf("Set '%T' failed: %w. Wanted at least '%s' but got '%s'", val, ErrAccessibilityTooLow, requiredAccessibility, rtAccessibility)
+	requiredAccessibility := max(cfg.accessibility, co.accessibility)
+	if typeAccessibility < requiredAccessibility {
+		return fmt.Errorf("Set '%T' failed: %w. Wanted at least '%s' but got '%s'", val, ErrAccessibilityTooLow, requiredAccessibility, typeAccessibility)
 	}
 
-	requiredNamedness := max(r.config.namedness, r.callOptions.namedness)
-	if rtNamedness < requiredNamedness {
-		return fmt.Errorf("Set '%T' failed: %w. Wanted at least '%s' but got '%s'", val, ErrNamednessTooLow, requiredNamedness, rtNamedness)
+	requiredNamedness := max(cfg.namedness, co.namedness)
+	if typeNamedness < requiredNamedness {
+		return fmt.Errorf("Set '%T' failed: %w. Wanted at least '%s' but got '%s'", val, ErrNamednessTooLow, requiredNamedness, typeNamedness)
 	}
 
 	if _, ok := r.store[rt]; !ok {
@@ -265,11 +273,14 @@ func setType[T any](r *registry, val T) error {
 
 // unsetType from the registry, caller must handle mutex locking
 func unsetType[T any](r *registry, val T) error {
-	defer r.dropCallOpts()
+	r.ensureCallOpts()
 
-	typeMustBeUnique := r.callOptions.uniqueType
+	co := r.callOptions
+	cfg := r.config
 
-	name := valueOrDefault(r.callOptions.name, r.config.defaultName)
+	typeMustBeUnique := co.uniqueType
+
+	name := valueOrDefault(co.name, cfg.defaultName)
 	rt := reflect.TypeFor[T]()
 
 	instances, ok := r.store[rt]
@@ -282,7 +293,7 @@ func unsetType[T any](r *registry, val T) error {
 	}
 
 	if _, ok := instances[name]; !ok {
-		if name != r.config.defaultName {
+		if name != cfg.defaultName {
 			return fmt.Errorf("Unset '%T' named '%s' failed: %w", val, name, ErrNotFound)
 		}
 
@@ -300,15 +311,18 @@ func unsetType[T any](r *registry, val T) error {
 
 // getType from the registry, caller must handle mutex locking
 func getType[T any](r *registry) (T, error) {
-	defer r.dropCallOpts()
+	r.ensureCallOpts()
 
-	if r.callOptions.uniqueName {
+	co := r.callOptions
+	cfg := r.config
+
+	if co.uniqueName {
 		return zeroValue[T](), fmt.Errorf("Get '%T' failed: %w", zeroValue[T](), ErrNotSupported)
 	}
 
-	typeMustBeUnique := r.config.uniqueTypes || r.callOptions.uniqueType
+	typeMustBeUnique := cfg.uniqueTypes || co.uniqueType
 
-	name := valueOrDefault(r.callOptions.name, r.config.defaultName)
+	name := valueOrDefault(co.name, cfg.defaultName)
 	rt := reflect.TypeFor[T]()
 
 	instances, ok := r.store[rt]
@@ -344,7 +358,10 @@ func getType[T any](r *registry) (T, error) {
 func getAll(r *registry) map[reflect.Type]map[string]any {
 	defer r.dropCallOpts()
 
-	stub := new(registry)
+	stub := &registry{
+		config: r.config.clone(),
+	}
+
 	cloneEntries(r, stub)
 
 	return stub.store

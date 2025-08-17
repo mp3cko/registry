@@ -40,6 +40,11 @@ type callOptions struct {
 	namedness     access.Namedness     // type namedness requirement
 }
 
+func (t *registry) cleanup() {
+	t.dropCallOpts()
+	t.mu.Unlock()
+}
+
 func (t *registry) ensureCallOpts() *callOptions {
 	if t.callOptions == nil {
 		t.callOptions = new(callOptions)

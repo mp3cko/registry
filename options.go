@@ -42,7 +42,8 @@ type (
 
 const (
 	priorityUndefined optionPriority = 0
-	priorityHighest                  = math.MaxInt - iota
+
+	priorityHighest = math.MaxInt - iota
 	prioritySecondHighest
 	priorityThirdHighest
 
@@ -91,16 +92,17 @@ func (t *option) apply(r *registry) error {
 
 // applyOptions applies all the provided options to the registry/call
 func applyOptions(r *registry, opts ...*option) (err error) {
+	r.ensureCallOpts()
+
 	if len(opts) == 0 {
 		return
 	}
 
 	slices.SortStableFunc(opts, optionSorter)
 
-	r.ensureCallOpts()
-
 	for _, opt := range opts {
 		if err = opt.apply(r); err != nil {
+			r.dropCallOpts()
 			return err
 		}
 

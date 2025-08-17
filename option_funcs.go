@@ -35,7 +35,7 @@ func WithRegistry(r *registry) *optionsBuilder {
 //
 //	Unset[T](WithUniqueType()) // returns ErrNotUniqueType if type is not unique
 func WithUniqueType() *optionsBuilder {
-	return newBuilder(withUniqueTypesOption())
+	return newBuilder(withUniqueTypeOption())
 }
 
 // WithUniqueName is a unique constraint on name (per type)
