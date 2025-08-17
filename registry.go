@@ -33,182 +33,319 @@ package reg
 import (
 	"fmt"
 	"reflect"
-	"sync"
+
+	"github.com/mp3cko/registry/access"
 )
 
-// To check for errors use errors.Is(err), don't use direct comparison(==) as they are wrapped
 var (
-	ErrNotFound  = fmt.Errorf("not found")
-	ErrNotUnique = fmt.Errorf("not unique")
-
-	ErrNotSupported = fmt.Errorf("not supported")
+	defaultRegistry, _ = NewRegistry()
 )
-
-var defReg, _ = NewRegistry()
 
 // NewRegistry creates a new registry with the given options.
 //
-// Registry instances must not be copied because they contains a mutex.
+// Do not copy registries, instead use:
 //
-// Instead use:
-//
-//	NewRegistry(WithCloneStore(srcRegistry))
+//	NewRegistry(WithCloneRegistry(src))
 func NewRegistry(opts ...Option) (*registry, error) {
 	reg := &registry{
 		store: map[reflect.Type]map[string]any{},
-		opts:  new(regOpts),
+		config: &registryConfig{
+			accessibility: access.AccessibleInsidePackage,
+			namedness:     access.NamednessUndefined,
+		},
 	}
 
-	reg, err := applyOptions(reg, unwrapOptions(opts)...)
-	if err != nil {
+	if err := applyOptions(reg, unwrapOptions(opts)...); err != nil {
 		return nil, err
 	}
 
-	reg.opts.initDone = true
+	reg.config.initComplete = true
 
 	return reg, nil
 }
 
-// Set registers a typed instance inside the registry.
-func Set[T any](val T, opts ...Option) error {
-	var (
-		err error
-		r   = defReg
-	)
+// SetDefaultRegistry changes the default registry used for all operations
+func SetDefaultRegistry(r *registry) {
+	old := defaultRegistry
 
-	r, err = applyOptions(r, unwrapOptions(opts)...)
-	if err != nil {
+	old.mu.Lock()
+	defer old.mu.Unlock()
+
+	defaultRegistry = r
+}
+
+// Set registers a instance inside the registry, modify its behavior by passing in options.
+//
+// Simplest Example:
+//
+//	Set(value)
+//
+// Less simple Example:
+//
+//	Set[InterfaceType](concreteValue, WithName("ConcreteInterface"))
+//
+// Complex Example:
+//
+//	Set(
+//		myService,
+//		WithRegistry(serviceRegistry).
+//		WithUniqueName().
+//		WithUniqueType().
+//		WithName("ExternalService"),
+//	)
+func Set[T any](val T, opts ...Option) error {
+	r := defaultRegistry
+	r.mu.Lock()
+
+	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
+		r.mu.Unlock()
 		return err
 	}
 
-	return setType(r, val)
-}
+	if r.callOptions.withRegistry != nil {
+		withReg := r.callOptions.withRegistry
+		callOpts := r.callOptions.withoutRegistry()
 
-// MustSet is a Set() wrapper that will panic on error
-func MustSet[T any](val T, opts ...Option) {
-	if err := Set(val, opts...); err != nil {
-		panic(err)
+		r.dropCallOpts()
+		r.mu.Unlock()
+
+		withReg.mu.Lock()
+		defer withReg.mu.Unlock()
+
+		r = withReg
+		r.callOptions = callOpts
 	}
+
+	return setType(r, val)
 }
 
 // Get retrieves the registered instance from a registry.
 // If no options are provided it will return the default registered instance or ErrNotFound if it doesn't exist.
 // Its behavior can be modified by passing in options (WithName, WithRegistry...)
 func Get[T any](opts ...Option) (T, error) {
-	var (
-		err error
-		r   = defReg
-	)
+	r := defaultRegistry
+	r.mu.Lock()
 
-	r, err = applyOptions(r, unwrapOptions(opts)...)
-	if err != nil {
-		return zeroType[T](), err
+	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
+		r.mu.Unlock()
+		return zeroValue[T](), err
+	}
+
+	if r.callOptions.uniqueName {
+		return zeroValue[T](), fmt.Errorf("Get WithUniqueNames: %w", ErrNotSupported)
+	}
+
+	if r.callOptions.withRegistry != nil {
+		withReg := r.callOptions.withRegistry
+		callOpts := r.callOptions.withoutRegistry()
+
+		r.dropCallOpts()
+		r.mu.Unlock()
+
+		withReg.mu.Lock()
+		defer withReg.mu.Unlock()
+
+		r = withReg
+		r.callOptions = callOpts
 	}
 
 	return getType[T](r)
 }
 
-// MustGet is a Get() wrapper that will panic on error
-func MustGet[T any](opts ...Option) T {
-	val, err := Get[T](opts...)
-	if err != nil {
-		panic(err)
-	}
-
-	return val
-}
-
-// registry is a type-safe registry where instances are registered and retrieved by type
-// (and optionally by name if you want to register multiple instances of the same type).
-type registry struct {
-	mu sync.RWMutex
-	// store maps a type to a map[name]instance. Default name is an empty string.
-	store map[reflect.Type]map[string]any
-	opts  *regOpts
-}
-
-type regOpts struct {
-	initDone           bool   // indicates if the registry has been initialized
-	nameDefault        string // registry-level default name
-	nameCall           string // per-call name
-	uniqueInstance     bool   // per-call unique instance constraint
-	uniqueInstanceCall bool   // registry-level unique instance constraint
-	uniqueName         bool   // per-call unique name constraint
-	uniqueNameCall     bool   // registry-level unique name constraint
-
-}
-
-func (t *regOpts) resetCallFlags() {
-	t.nameCall = ""
-	t.uniqueInstanceCall = false
-	t.uniqueNameCall = false
-}
-
-func setType[T any](r *registry, val T) error {
+func GetAll(opts ...Option) (map[reflect.Type]map[string]any, error) {
+	r := defaultRegistry
 	r.mu.Lock()
 
-	defer func() {
-		r.opts.resetCallFlags()
-		r.mu.Unlock()
-	}()
-
-	name := r.opts.nameDefault
-	if r.opts.nameCall != "" {
-		name = r.opts.nameCall
+	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
+		return nil, err
 	}
 
+	if r.callOptions.uniqueName {
+		return nil, fmt.Errorf("GetAll WithUniqueName: %w, use WithUniqueType instead", ErrNotSupported)
+	}
+
+	if r.callOptions.withRegistry != nil {
+		withReg := r.callOptions.withRegistry
+		callOpts := r.callOptions.withoutRegistry()
+
+		r.dropCallOpts()
+		r.mu.Unlock()
+
+		withReg.mu.Lock()
+		defer withReg.mu.Unlock()
+
+		r = withReg
+		r.callOptions = callOpts
+	}
+
+	return getAll(r), nil
+}
+
+func Unset[T any](val T, opts ...Option) error {
+	r := defaultRegistry
+	r.mu.Lock()
+
+	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+
+	if r.callOptions.uniqueName {
+		return fmt.Errorf("Unset WithUniqueName: %w, use WithUniqueType instead", ErrNotSupported)
+	}
+
+	if r.callOptions.withRegistry != nil {
+		withReg := r.callOptions.withRegistry
+		callOpts := r.callOptions.withoutRegistry()
+
+		r.dropCallOpts()
+		r.mu.Unlock()
+
+		withReg.mu.Lock()
+		defer withReg.mu.Unlock()
+
+		r = withReg
+		r.callOptions = callOpts
+
+	}
+
+	return unsetType(r, val)
+}
+
+// func UnsetAll
+
+// setType in registry, caller must handle mutex locking
+func setType[T any](r *registry, val T) error {
+	defer r.dropCallOpts()
+
+	typeMustBeUnique := r.config.uniqueTypes || r.callOptions.uniqueType
+	nameMustBeUnique := r.config.uniqueNames || r.callOptions.uniqueName
+	name := valueOrDefault(r.callOptions.name, r.config.defaultName)
+
 	rt := reflect.TypeFor[T]()
+
+	rtNamedness, rtAccessibility := access.Info(rt)
+
+	requiredAccessibility := max(r.config.accessibility, r.callOptions.accessibility)
+	if rtAccessibility < requiredAccessibility {
+		return fmt.Errorf("Set '%T' failed: %w. Wanted at least '%s' but got '%s'", val, ErrAccessibilityTooLow, requiredAccessibility, rtAccessibility)
+	}
+
+	requiredNamedness := max(r.config.namedness, r.callOptions.namedness)
+	if rtNamedness < requiredNamedness {
+		return fmt.Errorf("Set '%T' failed: %w. Wanted at least '%s' but got '%s'", val, ErrNamednessTooLow, requiredNamedness, rtNamedness)
+	}
 
 	if _, ok := r.store[rt]; !ok {
 		r.store[rt] = map[string]any{}
 	}
 
-	if r.opts.uniqueInstanceCall || r.opts.uniqueInstance {
-		if _, ok := r.store[rt][name]; ok {
-			if name == "" {
-				return fmt.Errorf("register '%T' failed: %w", val, ErrNotUnique)
+	if typeMustBeUnique && len(r.store[rt]) != 0 {
+		if name != "" {
+			return fmt.Errorf("Set '%T' named '%s' failed: %w", val, name, ErrNotUniqueType)
+		}
+
+		return fmt.Errorf("Set '%T' failed: %w", val, ErrNotUniqueType)
+	}
+
+	if _, ok := r.store[rt][name]; ok {
+		if nameMustBeUnique {
+			if name != "" {
+				return fmt.Errorf("Set '%T' named '%s' failed: %w", val, name, ErrNotUniqueName)
 			}
 
-			return fmt.Errorf("register '%T' name '%s' failed: %w", val, name, ErrNotUnique)
+			return fmt.Errorf("Set '%T' failed: %w", val, ErrNotUniqueName)
 		}
 	}
 
-	r.store[rt][name] = any(val)
+	r.store[rt][name] = val
 
 	return nil
 }
 
-func getType[T any](r *registry) (T, error) {
-	r.mu.RLock()
+// unsetType from the registry, caller must handle mutex locking
+func unsetType[T any](r *registry, val T) error {
+	defer r.dropCallOpts()
 
-	defer func() {
-		r.opts.resetCallFlags()
-		r.mu.RUnlock()
-	}()
+	typeMustBeUnique := r.callOptions.uniqueType
 
-	name := r.opts.nameDefault
-	if r.opts.nameCall != "" {
-		name = r.opts.nameCall
-	}
-
+	name := valueOrDefault(r.callOptions.name, r.config.defaultName)
 	rt := reflect.TypeFor[T]()
 
-	typeMap, ok := r.store[rt]
+	instances, ok := r.store[rt]
 	if !ok {
-		z := zeroType[T]()
-		return z, fmt.Errorf("get '%T' failed: %w", z, ErrNotFound)
+		return fmt.Errorf("Unset '%T' failed: %w", val, ErrNotFound)
 	}
 
-	svc, ok := typeMap[name]
-	if !ok {
-		z := zeroType[T]()
-		return z, fmt.Errorf("get '%T' name '%s' failed: %w", z, name, ErrNotFound)
+	if typeMustBeUnique && len(instances) > 1 {
+		return fmt.Errorf("Unset '%T' WithUniqueType failed: %w", val, ErrNotUniqueType)
 	}
 
-	return svc.(T), nil
+	if _, ok := instances[name]; !ok {
+		if name != r.config.defaultName {
+			return fmt.Errorf("Unset '%T' named '%s' failed: %w", val, name, ErrNotFound)
+		}
+
+		return fmt.Errorf("Unset '%T' failed: %w", val, ErrNotFound)
+	}
+
+	if len(instances) > 1 {
+		delete(instances, name)
+	} else {
+		delete(r.store, rt)
+	}
+
+	return nil
 }
 
-func zeroType[T any]() T {
-	var zero T
-	return zero
+// getType from the registry, caller must handle mutex locking
+func getType[T any](r *registry) (T, error) {
+	defer r.dropCallOpts()
+
+	if r.callOptions.uniqueName {
+		return zeroValue[T](), fmt.Errorf("Get '%T' failed: %w", zeroValue[T](), ErrNotSupported)
+	}
+
+	typeMustBeUnique := r.config.uniqueTypes || r.callOptions.uniqueType
+
+	name := valueOrDefault(r.callOptions.name, r.config.defaultName)
+	rt := reflect.TypeFor[T]()
+
+	instances, ok := r.store[rt]
+	if !ok {
+		z := zeroValue[T]()
+
+		return z, fmt.Errorf("Get '%T' failed: %w", z, ErrNotFound)
+	}
+
+	if typeMustBeUnique && len(instances) > 1 {
+		z := zeroValue[T]()
+		if name != "" {
+			return z, fmt.Errorf("Get '%T' named '%s' failed: %w", z, name, ErrNotUniqueType)
+		}
+
+		return z, fmt.Errorf("Get '%T' failed: %w", zeroValue[T](), ErrNotUniqueType)
+	}
+
+	val, ok := r.store[rt][name]
+	if !ok {
+		z := zeroValue[T]()
+		if name == "" {
+			return z, fmt.Errorf("Get '%T' failed: %w", z, ErrNotFound)
+		}
+
+		return z, fmt.Errorf("Get '%T' named '%s' failed: %w", z, name, ErrNotFound)
+	}
+
+	return val.(T), nil
+}
+
+// getAll returns all registered instances, filtered by callopts from r
+func getAll(r *registry) map[reflect.Type]map[string]any {
+	defer r.dropCallOpts()
+
+	stub := new(registry)
+	cloneEntries(r, stub)
+
+	return stub.store
 }

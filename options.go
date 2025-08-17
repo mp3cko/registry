@@ -14,7 +14,7 @@ type (
 	//
 	// All the provided options can be passed individually (variadic arguments) or chained one after another
 	Option interface {
-		apply(*registry) (*registry, error)
+		apply(*registry) error
 	}
 
 	// optionsBuilder is a wrapper that allows chaining multiple option values directly instead of passing them individually, so both of these are valid:
@@ -34,17 +34,21 @@ type (
 	}
 
 	// optionFunc is an implementation of Option
-	optionFunc func(*registry) (*registry, error)
+	optionFunc func(*registry) error
 
 	// optionsPriority defines the priority of an option, which determines its order of execution
 	optionPriority int
 )
 
 const (
-	priorityUndefined optionPriority = iota
-	priorityHighest
+	priorityUndefined optionPriority = 0
+	priorityHighest                  = math.MaxInt - iota
+	prioritySecondHighest
+	priorityThirdHighest
 
-	priorityLowest = math.MinInt
+	priorityLowest = math.MinInt + iota
+	prioritySecondLowest
+	priorityThirdLowest
 )
 
 // @TODO - see if I want to use this
@@ -65,58 +69,49 @@ func (t *optionsBuilder) and(opts ...*option) *optionsBuilder {
 // apply applies all contained options in the following order:
 // 1. Their priority
 // 2. Their order of appearance
-func (t *optionsBuilder) apply(r *registry) (*registry, error) {
+func (t *optionsBuilder) apply(r *registry) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	r, err := applyOptions(r, t.o...)
-	if err != nil {
-		return nil, err
+	if err := applyOptions(r, t.o...); err != nil {
+		return err
 	}
 
 	if t.isGlobalInstance {
 		t.o = nil
 	}
 
-	return r, nil
+	return nil
 }
 
 // apply a single option
-func (t *option) apply(r *registry) (*registry, error) {
+func (t *option) apply(r *registry) error {
 	return t.optionFunc(r)
 }
 
 // applyOptions applies all the provided options to the registry/call
-func applyOptions(reg *registry, opts ...*option) (*registry, error) {
+func applyOptions(r *registry, opts ...*option) (err error) {
 	if len(opts) == 0 {
-		return reg, nil
+		return
 	}
 
-	slices.SortStableFunc(opts, func(a, b *option) int {
-		if a.optionPriority > b.optionPriority {
-			return -1
-		} else if a.optionPriority < b.optionPriority {
-			return 1
-		}
+	slices.SortStableFunc(opts, optionSorter)
 
-		return 0
-	})
+	r.ensureCallOpts()
 
 	for _, opt := range opts {
-		newReg, err := opt.apply(reg)
-		if err != nil {
-			return nil, err
+		if err = opt.apply(r); err != nil {
+			return err
 		}
 
-		reg = newReg
 	}
 
-	return reg, nil
+	return
 }
 
 // unwrapOptions unwrap []Option interface to []*option from concrete []*optionsBuilder
 func unwrapOptions(opts []Option) []*option {
-	var unwrapped []*option
+	unwrapped := make([]*option, 0, len(opts))
 
 	for _, opt := range opts {
 		ob := opt.(*optionsBuilder)
@@ -124,4 +119,16 @@ func unwrapOptions(opts []Option) []*option {
 	}
 
 	return unwrapped
+}
+
+func optionSorter(a, b *option) int {
+	if a.optionPriority > b.optionPriority {
+		return -1
+	}
+
+	if a.optionPriority < b.optionPriority {
+		return 1
+	}
+
+	return 0
 }
