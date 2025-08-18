@@ -272,15 +272,29 @@ func getCallerFuncName(skip int) string {
 	return fn.Name()
 }
 
-// extractCallerPKG returns the package import path of the caller function/frame at the given skip.
-// It derives the package portion from runtime function name, which is of the form:
-//
-//	"full/import/path.Function" or "full/import/path.(*Type).Method".
+// extractCallerPKG returns the package import path from runtime.FuncForPC(pc).Name()
 func extractCallerPKG(callerFunc string) string {
-	// Package path is everything before the last dot.
-	if i := strings.LastIndex(callerFunc, "."); i >= 0 {
-		return callerFunc[:i]
+	if callerFunc == "" {
+		return ""
 	}
 
+	var start int
+	// look for the last slash in path
+	if slash: = strings.LastIndex(callerFunc, "/"); slash >= 0 {
+		start = slash + 1
+
+		// return everything after it until the first dot // ex. "full/import/path" for "full/import/path.(*Type).Method" 
+		if dot := strings.Index(callerFunc[start:], "."); dot >= 0 {
+			return callerFunc[:start+dot]
+		}
+	}
+	
+
+	// no slash; best-effort trim at the last dot. // ex. "noslashmod" for "noslashmod.Function"
+	if dot := strings.LastIndex(callerFunc, "."); dot >= 0 {
+		return callerFunc[:dot]
+	}
+
+	// main.main for example
 	return callerFunc
 }
