@@ -280,7 +280,7 @@ func extractCallerPKG(callerFunc string) string {
 
 	var start int
 	// look for the last slash in path
-	if slash: = strings.LastIndex(callerFunc, "/"); slash >= 0 {
+	if slash := strings.LastIndex(callerFunc, "/"); slash >= 0 {
 		start = slash + 1
 
 		// return everything after it until the first dot // ex. "full/import/path" for "full/import/path.(*Type).Method" 
