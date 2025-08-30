@@ -33,13 +33,19 @@ package reg
 import (
 	"fmt"
 	"reflect"
+	"sync/atomic"
 
 	"github.com/mp3cko/registry/access"
 )
 
 var (
-	defaultRegistry, _ = NewRegistry()
+	defReg atomic.Pointer[registry]
 )
+
+func init() {
+	reg, _ := NewRegistry()
+	defReg.Store(reg)
+}
 
 // NewRegistry creates a new registry with the given options.
 //
@@ -66,12 +72,7 @@ func NewRegistry(opts ...Option) (*registry, error) {
 
 // SetDefaultRegistry changes the default registry used for all operations
 func SetDefaultRegistry(r *registry) {
-	old := defaultRegistry
-
-	old.mu.Lock()
-	defer old.mu.Unlock()
-
-	defaultRegistry = r
+	defReg.Swap(r)
 }
 
 // Set registers a instance inside the registry, modify its behavior by passing in options.
@@ -94,7 +95,7 @@ func SetDefaultRegistry(r *registry) {
 //		WithName("ExternalService"),
 //	)
 func Set[T any](val T, opts ...Option) error {
-	r := defaultRegistry
+	r := defReg.Load()
 	r.mu.Lock()
 
 	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
@@ -123,7 +124,7 @@ func Set[T any](val T, opts ...Option) error {
 // If no options are provided it will return the default registered instance or ErrNotFound if it doesn't exist.
 // Its behavior can be modified by passing in options (WithName, WithRegistry...)
 func Get[T any](opts ...Option) (T, error) {
-	r := defaultRegistry
+	r := defReg.Load()
 	r.mu.Lock()
 
 	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
@@ -154,7 +155,7 @@ func Get[T any](opts ...Option) (T, error) {
 }
 
 func GetAll(opts ...Option) (map[reflect.Type]map[string]any, error) {
-	r := defaultRegistry
+	r := defReg.Load()
 	r.mu.Lock()
 
 	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {
@@ -185,7 +186,7 @@ func GetAll(opts ...Option) (map[reflect.Type]map[string]any, error) {
 }
 
 func Unset[T any](val T, opts ...Option) error {
-	r := defaultRegistry
+	r := defReg.Load()
 	r.mu.Lock()
 
 	if err := applyOptions(r, unwrapOptions(opts)...); err != nil {

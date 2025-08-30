@@ -99,6 +99,7 @@ func isExported(name string) bool {
 	if name == "" {
 		return false
 	}
+
 	r, _ := utf8.DecodeRuneInString(name)
 	return unicode.IsUpper(r)
 }
@@ -272,7 +273,7 @@ func getCallerFuncName(skip int) string {
 	return fn.Name()
 }
 
-// extractCallerPKG returns the package import path from runtime.FuncForPC(pc).Name()
+// extractCallerPKG returns the package import path from runtime.FuncForPC().Name().
 func extractCallerPKG(callerFunc string) string {
 	if callerFunc == "" {
 		return ""
@@ -283,18 +284,17 @@ func extractCallerPKG(callerFunc string) string {
 	if slash := strings.LastIndex(callerFunc, "/"); slash >= 0 {
 		start = slash + 1
 
-		// return everything after it until the first dot // ex. "full/import/path" for "full/import/path.(*Type).Method" 
+		// return everything from beginning until the first after the last slash // ex. "full/import/path" for "full/import/path.(*Type).Method"
 		if dot := strings.Index(callerFunc[start:], "."); dot >= 0 {
 			return callerFunc[:start+dot]
 		}
 	}
-	
 
 	// no slash; best-effort trim at the last dot. // ex. "noslashmod" for "noslashmod.Function"
 	if dot := strings.LastIndex(callerFunc, "."); dot >= 0 {
 		return callerFunc[:dot]
 	}
 
-	// main.main for example
+	// fallback to returning the whole string
 	return callerFunc
 }
