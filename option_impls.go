@@ -160,7 +160,7 @@ func withCloneConfigOption(src *registry) *option {
 		src.mu.Lock()
 		defer src.mu.Unlock()
 
-		*dest.config = *src.config
+		dest.config = src.config.clone()
 
 		return nil
 	}
@@ -267,19 +267,19 @@ func newOptionWithPriority(o optionFunc, p optionPriority) *option {
 
 func checkBadOpt(src, dest *registry, optName string) error {
 	if dest.config.init.uniqueTypesSet && src.config.init.uniqueTypesSet && dest.config.uniqueTypes != src.config.uniqueTypes {
-		return fmt.Errorf("%s source WithUniqueType setting(%s) conflicts with yours(%s): %w", optName, src.config.uniqueTypes, dest.config.uniqueTypes, ErrBadOption)
+		return fmt.Errorf("%s source WithUniqueType setting(%v) conflicts with yours(%v): %w", optName, src.config.uniqueTypes, dest.config.uniqueTypes, ErrBadOption)
 	}
 
 	if dest.config.init.uniqueNamesSet && src.config.init.uniqueNamesSet && dest.config.uniqueNames != src.config.uniqueNames {
-		return fmt.Errorf("%s source WithUniqueName setting(%s) conflicts with yours(%s): %w", optName, src.config.uniqueNames, dest.config.uniqueNames, ErrBadOption)
+		return fmt.Errorf("%s source WithUniqueName setting(%v) conflicts with yours(%v): %w", optName, src.config.uniqueNames, dest.config.uniqueNames, ErrBadOption)
 	}
 
-	if dest.config.accessibility > src.config.accessibility {
-		return fmt.Errorf("%s source WithAccessibility setting(%s) lower than yours(%s): %w", optName, src.config.accessibility, dest.config.accessibility, ErrBadOption)
+	if dest.config.accessibility != access.AccessibilityUndefined && src.config.accessibility != access.AccessibilityUndefined && dest.config.accessibility != src.config.accessibility {
+		return fmt.Errorf("%s source WithAccessibility setting(%s) conflicts with yours(%s): %w", optName, src.config.accessibility, dest.config.accessibility, ErrBadOption)
 	}
 
-	if dest.config.namedness > src.config.namedness {
-		return fmt.Errorf("%s source WithNamedness setting(%s) lower than yours(%s): %w", optName, src.config.namedness, dest.config.namedness, ErrBadOption)
+	if dest.config.namedness != access.NamednessUndefined && src.config.namedness != access.NamednessUndefined && dest.config.namedness != src.config.namedness {
+		return fmt.Errorf("%s source WithNamedness setting(%s) conflicts with yours(%s): %w", optName, src.config.namedness, dest.config.namedness, ErrBadOption)
 	}
 
 	return nil

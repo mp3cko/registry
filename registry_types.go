@@ -72,6 +72,7 @@ func (t *registryConfig) clone() *registryConfig {
 	}
 
 	clone := *t
+	clone.init.complete = false
 	return &clone
 }
 
