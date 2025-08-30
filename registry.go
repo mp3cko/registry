@@ -42,16 +42,28 @@ var (
 	defReg atomic.Pointer[registry]
 )
 
+const (
+	DefaultName = ""
+)
+
 func init() {
 	reg, _ := NewRegistry()
+	_ = reg
 	defReg.Store(reg)
 }
 
 // NewRegistry creates a new registry with the given options.
 //
-// Do not copy registries, instead use:
+// If the same option is provided multiple times, they are executed in their order of appearance.
 //
-//	NewRegistry(WithCloneRegistry(src))
+// When using [WithCloneConfig], [WithCloneRegistry] or [WithCloneEntries] :
+//
+// Their configs must not conflict otherwise [ErrBadOption] is returned
+//
+// Example:
+//
+//	src := NewRegistry(WithAccessibility(access.AccessibleInsidePackage))
+//	NewRegistry(WithCloneConfig(src).WithAccessibility(access.AccessibleEverywhere)) // returns [ErrBadOption]
 func NewRegistry(opts ...Option) (*registry, error) {
 	reg := &registry{
 		store: map[reflect.Type]map[string]any{},
@@ -65,7 +77,7 @@ func NewRegistry(opts ...Option) (*registry, error) {
 		return nil, err
 	}
 
-	reg.config.initComplete = true
+	reg.config.init.complete = true
 
 	return reg, nil
 }
@@ -214,8 +226,6 @@ func Unset[T any](val T, opts ...Option) error {
 
 	return unsetType(r, val)
 }
-
-// func UnsetAll
 
 // setType in registry, caller must handle mutex locking
 func setType[T any](r *registry, val T) error {

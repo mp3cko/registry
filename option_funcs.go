@@ -135,27 +135,6 @@ func WithNamedness(namedness access.Namedness) *optionsBuilder {
 	return newBuilder(withNamednessOption(namedness))
 }
 
-// WithCloneEntries copies all entries from the provided registry into the new registry.
-//
-// # Valid:
-//
-//	NewRegistry(WithCloneEntries(src)) // copies all entries from src to the new registry
-//
-// # Invalid:
-//
-//	Get[T](WithCloneEntries(src)) // returns ErrNotSupported
-//
-//	Set(val, WithCloneEntries(src)) // returns ErrNotSupported
-//
-//	GetAll(WithNamedness(access.AnonymousType)) // returns ErrNotSupported
-//
-//	Unset[T](WithNamedness(access.NamedType)) // returns ErrNotSupported
-//
-// This option respects other options and is applied near the end of the chain
-func WithCloneEntries(src *registry) *optionsBuilder {
-	return newBuilder(withCloneEntriesOption(src))
-}
-
 // WithCloneConfig copies configuration from the provided registry
 //
 // # Valid:
@@ -172,9 +151,30 @@ func WithCloneEntries(src *registry) *optionsBuilder {
 //
 //	Unset[T](WithCloneConfig(src)) // returns ErrNotSupported
 //
-// This option is applied near the end of the chain
+// This option is applied 3rd to last, just before [WithCloneRegistry] and [WithCloneEntries]
 func WithCloneConfig(src *registry) *optionsBuilder {
 	return newBuilder(withCloneConfigOption(src))
+}
+
+// WithCloneEntries copies all entries from the provided registry into the new registry.
+//
+// # Valid:
+//
+//	NewRegistry(WithCloneEntries(src)) // copies all entries from src to the new registry
+//
+// # Invalid:
+//
+//	Get[T](WithCloneEntries(src)) // returns ErrNotSupported
+//
+//	Set(val, WithCloneEntries(src)) // returns ErrNotSupported
+//
+//	GetAll(WithNamedness(access.AnonymousType)) // returns ErrNotSupported
+//
+//	Unset[T](WithNamedness(access.NamedType)) // returns ErrNotSupported
+//
+// This option is applied second to last, before [WithCloneRegistry]
+func WithCloneEntries(src *registry) *optionsBuilder {
+	return newBuilder(withCloneEntriesOption(src))
 }
 
 // WithCloneRegistry copies configuration and entries from the provided registry

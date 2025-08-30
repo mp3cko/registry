@@ -13,17 +13,16 @@ import (
 type Accessibility int
 
 const (
-	// Accessibility is not defined
-	AccessibilityUndefined Accessibility = iota
-
 	// The type is not accessible
-	NotAccessible
+	NotAccessible = -1
+	// Accessibility is not defined
+	AccessibilityUndefined Accessibility = 0
 
 	// The type is accessible only within its own package
-	AccessibleInsidePackage
+	AccessibleInsidePackage = 1
 
 	// The type is accessible from any package
-	AccessibleEverywhere
+	AccessibleEverywhere = 2
 )
 
 type Namedness int

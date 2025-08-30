@@ -19,15 +19,20 @@ type registry struct {
 
 // registryConfig holds the configuration for the registry.
 type registryConfig struct {
-	initComplete   bool                 // indicates if the registry has been fully initialized
-	clonedEntries  bool                 // indicates that the registry was initialized using WithCloneEntries
-	clonedConfig   bool                 // indicates that the registry was initialized using WithCloneConfig
-	clonedRegistry bool                 // indicates that the registry was initialized using WithCloneRegistry
-	defaultName    string               // default name for new instances
-	uniqueTypes    bool                 // enforce single instance per type
-	uniqueNames    bool                 // enforce unique names per type
-	accessibility  access.Accessibility // enforce type accessibility
-	namedness      access.Namedness     // enforce type namedness
+	init          initOpts             // initialization options
+	defaultName   string               // default name for new instances
+	uniqueTypes   bool                 // enforce single instance per type
+	uniqueNames   bool                 // enforce unique names per type
+	accessibility access.Accessibility // enforce type accessibility
+	namedness     access.Namedness     // enforce type namedness
+}
+
+type initOpts struct {
+	complete         bool // indicates that the registry has been fully initialized
+	uniqueTypesSet   bool // indicates that the registry was initialized using WithUniqueType
+	uniqueNamesSet   bool // indicates that the registry was initialized using WithUniqueName
+	accessibilitySet bool // indicates that the registry was initialized using WithAccessibility
+	namednessSet     bool // indicates that the registry was initialized using WithNamedness
 }
 
 // callOptions holds the options for a single call to the registry.

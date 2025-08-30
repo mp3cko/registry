@@ -10,7 +10,7 @@ import (
 // WithRegistry implementation
 func withRegistryOption(useRegistry *registry) *option {
 	f := func(original *registry) error {
-		if !original.config.initComplete {
+		if !original.config.init.complete {
 			return fmt.Errorf("WithRegistry used inside NewRegistry: %w", ErrNotSupported)
 		}
 
@@ -25,8 +25,13 @@ func withRegistryOption(useRegistry *registry) *option {
 // WithUniqueType implementation
 func withUniqueTypeOption() *option {
 	f := func(r *registry) error {
-		if !r.config.initComplete {
+		if !r.config.init.complete {
+			if r.config.init.uniqueTypesSet {
+				return fmt.Errorf("multiple WithUniqueType calls: %w", ErrBadOption)
+			}
+
 			r.config.uniqueTypes = true
+			r.config.init.uniqueTypesSet = true
 			return nil
 		}
 
@@ -41,8 +46,13 @@ func withUniqueTypeOption() *option {
 // WithUniqueName implementation
 func withUniqueNamesOption() *option {
 	f := func(r *registry) error {
-		if !r.config.initComplete {
+		if !r.config.init.complete {
+			if r.config.init.uniqueNamesSet {
+				return fmt.Errorf("multiple WithUniqueName calls: %w", ErrBadOption)
+			}
+
 			r.config.uniqueNames = true
+			r.config.init.uniqueNamesSet = true
 			return nil
 		}
 
@@ -57,8 +67,13 @@ func withUniqueNamesOption() *option {
 // WithName implementation
 func withNameOption(n string) *option {
 	f := func(r *registry) error {
-		if !r.config.initComplete {
+		if !r.config.init.complete {
+			if r.config.defaultName != DefaultName {
+				return fmt.Errorf("WithName called multiple times: %w", ErrBadOption)
+			}
+
 			r.config.defaultName = n
+
 			return nil
 		}
 
@@ -73,8 +88,12 @@ func withNameOption(n string) *option {
 // WithNamedness implementation
 func withNamednessOption(namedness access.Namedness) *option {
 	f := func(r *registry) error {
-		if !r.config.initComplete {
+		if !r.config.init.complete {
+			if r.config.init.namednessSet {
+				return fmt.Errorf("multiple WithNamedness calls: %w", ErrBadOption)
+			}
 			r.config.namedness = namedness
+			r.config.init.namednessSet = true
 		} else {
 			r.callOptions.namedness = namedness
 		}
@@ -88,8 +107,12 @@ func withNamednessOption(namedness access.Namedness) *option {
 // WithAccessibility implementation
 func withAccessibilityOption(level access.Accessibility) *option {
 	f := func(r *registry) error {
-		if !r.config.initComplete {
+		if !r.config.init.complete {
+			if r.config.init.accessibilitySet {
+				return fmt.Errorf("multiple WithAccessibility calls: %w", ErrBadOption)
+			}
 			r.config.accessibility = level
+			r.config.init.accessibilitySet = true
 		} else {
 			r.callOptions.accessibility = level
 		}
@@ -103,23 +126,19 @@ func withAccessibilityOption(level access.Accessibility) *option {
 // WithCloneEntries implementation
 func withCloneEntriesOption(src *registry) *option {
 	f := func(dest *registry) error {
-		if dest.config.initComplete {
+		if dest.config.init.complete {
 			return fmt.Errorf("WithCloneEntries used outside NewRegistry: %w", ErrNotSupported)
 		}
 
-		if dest.config.clonedConfig {
-			return fmt.Errorf("WithCloneEntries called after WithCloneConfig: %w: use WithCloneRegistry instead", ErrNotSupported)
-		}
-
-		if src == nil {
-			return nil
+		if err := checkBadOpt(src, dest, "WithCloneEntries"); err != nil {
+			return err
 		}
 
 		src.mu.Lock()
 		defer src.mu.Unlock()
 
 		cloneEntries(src, dest)
-		dest.config.clonedEntries = true
+		// dest.config.init.clonedEntries = true
 
 		return nil
 	}
@@ -130,16 +149,12 @@ func withCloneEntriesOption(src *registry) *option {
 // WithCloneConfig implementation
 func withCloneConfigOption(src *registry) *option {
 	f := func(dest *registry) error {
-		if dest.config.initComplete {
+		if dest.config.init.complete {
 			return fmt.Errorf("WithCloneConfig used outside NewRegistry: %w", ErrNotSupported)
 		}
 
-		if dest.config.clonedEntries {
-			return fmt.Errorf("WithCloneConfig called after WithCloneEntries: %w: use WithCloneRegistry instead", ErrNotSupported)
-		}
-
-		if src == nil {
-			return nil
+		if err := checkBadOpt(src, dest, "WithCloneConfig"); err != nil {
+			return err
 		}
 
 		src.mu.Lock()
@@ -156,20 +171,12 @@ func withCloneConfigOption(src *registry) *option {
 // WithCloneRegistry implementation
 func withCloneRegistryOption(src *registry) *option {
 	f := func(dest *registry) error {
-		if dest.config.initComplete {
+		if dest.config.init.complete {
 			return fmt.Errorf("WithCloneRegistry used outside NewRegistry: %w", ErrNotSupported)
 		}
 
-		if dest.config.clonedRegistry {
-			return fmt.Errorf("multiple WithCloneRegistry calls: %w", ErrNotSupported)
-		}
-
-		if dest.config.clonedEntries || dest.config.clonedConfig {
-			return fmt.Errorf("WithCloneRegistry: %w in combination WithCloneConfig or WithCloneEntries", ErrNotSupported)
-		}
-
-		if src == nil {
-			return nil
+		if err := checkBadOpt(src, dest, "WithCloneRegistry"); err != nil {
+			return err
 		}
 
 		src.mu.Lock()
@@ -177,7 +184,7 @@ func withCloneRegistryOption(src *registry) *option {
 
 		dest.config = src.config.clone()
 		cloneEntries(src, dest)
-		dest.config.clonedRegistry = true
+		// dest.config.init.clonedRegistry = true
 
 		return nil
 	}
@@ -185,12 +192,12 @@ func withCloneRegistryOption(src *registry) *option {
 	return newOptionWithPriority(f, priorityLowest)
 }
 
-func cloneEntries(from, to *registry) {
-	if to.store == nil {
-		to.store = make(map[reflect.Type]map[string]any, len(from.store))
+func cloneEntries(src, dest *registry) {
+	if dest.store == nil {
+		dest.store = make(map[reflect.Type]map[string]any, len(src.store))
 	}
 
-	opts := valueOrDefault(from.callOptions, new(callOptions))
+	opts := valueOrDefault(src.callOptions, new(callOptions))
 
 	accessibilityOption := valueOrDefault(opts.accessibility, access.AccessibilityUndefined)
 	namednessOption := valueOrDefault(opts.namedness, access.NamednessUndefined)
@@ -198,7 +205,7 @@ func cloneEntries(from, to *registry) {
 	uniqueType := opts.uniqueType
 	nameFilter := opts.name
 
-	for rt, instances := range from.store {
+	for rt, instances := range src.store {
 		if int(namednessOption)+int(accessibilityOption) > 0 {
 			rtNamedness, rtAccessibility := access.Info(rt)
 
@@ -219,27 +226,27 @@ func cloneEntries(from, to *registry) {
 			nInstances = 1
 		}
 
-		_, ok := to.store[rt]
+		_, ok := dest.store[rt]
 		if !ok {
-			to.store[rt] = make(map[string]any, nInstances)
+			dest.store[rt] = make(map[string]any, nInstances)
 		}
 
 		for name, instance := range instances {
 			if nameFilter != "" {
 				if name == nameFilter {
-					to.store[rt][name] = instance
+					dest.store[rt][name] = instance
 				}
 
 				continue
 			}
 
-			if to.config.defaultName != from.config.defaultName && name == from.config.defaultName {
-				to.store[rt][to.config.defaultName] = instance
+			if dest.config.defaultName != src.config.defaultName && name == src.config.defaultName {
+				dest.store[rt][dest.config.defaultName] = instance
 
 				continue
 			}
 
-			to.store[rt][name] = instance
+			dest.store[rt][name] = instance
 		}
 	}
 
@@ -256,4 +263,24 @@ func newOptionWithPriority(o optionFunc, p optionPriority) *option {
 		optionFunc:     o,
 		optionPriority: p,
 	}
+}
+
+func checkBadOpt(src, dest *registry, optName string) error {
+	if dest.config.init.uniqueTypesSet && src.config.init.uniqueTypesSet && dest.config.uniqueTypes != src.config.uniqueTypes {
+		return fmt.Errorf("%s source WithUniqueType setting(%s) conflicts with yours(%s): %w", optName, src.config.uniqueTypes, dest.config.uniqueTypes, ErrBadOption)
+	}
+
+	if dest.config.init.uniqueNamesSet && src.config.init.uniqueNamesSet && dest.config.uniqueNames != src.config.uniqueNames {
+		return fmt.Errorf("%s source WithUniqueName setting(%s) conflicts with yours(%s): %w", optName, src.config.uniqueNames, dest.config.uniqueNames, ErrBadOption)
+	}
+
+	if dest.config.accessibility > src.config.accessibility {
+		return fmt.Errorf("%s source WithAccessibility setting(%s) lower than yours(%s): %w", optName, src.config.accessibility, dest.config.accessibility, ErrBadOption)
+	}
+
+	if dest.config.namedness > src.config.namedness {
+		return fmt.Errorf("%s source WithNamedness setting(%s) lower than yours(%s): %w", optName, src.config.namedness, dest.config.namedness, ErrBadOption)
+	}
+
+	return nil
 }
